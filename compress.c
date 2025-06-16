@@ -26,9 +26,13 @@
 	
 */
 
+#include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
 #include "compress.h"
+#define HASH_NONFATAL_OOM 1
+#undef uthash_nonfatal_oom
+#define uthash_nonfatal_oom(elt) recover_from_hash_oom((tuple_t *) (elt))
 #include "uthash.h"
 
 // memmem.c
@@ -73,7 +77,7 @@ typedef struct {
 	UT_hash_handle hh;
 } tuple_t;
 // turn 4 bytes into a single integer for quicker hashing/searching
-#define COMBINE(w, x, y, z) ((w << 24) | (x << 16) | (y << 8) | z)
+#define COMBINE(w, x, y, z) (((unsigned)(w) << 24) | ((x) << 16) | ((y) << 8) | (z))
 
 typedef struct {
 	uint8_t *unpacked;
@@ -93,33 +97,10 @@ typedef struct {
 	
 } pack_context_t;
 
+static _Thread_local jmp_buf hash_error_jmpbuf;
 // ------------------------------------------------------------------------------------------------
-static pack_context_t* pack_context_alloc(uint8_t *unpacked, size_t inputsize, uint8_t *packed) {
-	pack_context_t *this;
-	
-	if (inputsize > DATA_SIZE) return 0;
-	if (!(this = calloc(1, sizeof(*this)))) return 0;
-	
-	this->unpacked  = unpacked;
-	this->inputsize = inputsize;
-	this->packed    = packed;
-	
-	// index locations of all 4-byte sequences occurring in the input
-	for (uint16_t i = 0; inputsize >= 4 && i < inputsize - 4; i++) {
-		tuple_t *tuple;
-		int currbytes = COMBINE(unpacked[i], unpacked[i+1], unpacked[i+2], unpacked[i+3]);
-		
-		// has this one been indexed already
-		HASH_FIND_INT(this->offsets, &currbytes, tuple);
-		if (!tuple) {
-			tuple = (tuple_t*)malloc(sizeof(tuple_t));
-			tuple->bytes = currbytes;
-			tuple->offset = i;
-			HASH_ADD_INT(this->offsets, bytes, tuple);
-		}
-	}
-	
-	return this;
+static void recover_from_hash_oom(tuple_t *element) {
+	longjmp(hash_error_jmpbuf, 1);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -131,6 +112,44 @@ static void pack_context_free(pack_context_t* this) {
 	}
 	
 	free(this);
+}
+
+// ------------------------------------------------------------------------------------------------
+static pack_context_t* pack_context_alloc(uint8_t *unpacked, size_t inputsize, uint8_t *packed) {
+	pack_context_t *this;
+	
+	if (inputsize > DATA_SIZE) return 0;
+	if (!(this = calloc(1, sizeof(*this)))) return 0;
+	
+	this->unpacked  = unpacked;
+	this->inputsize = inputsize;
+	this->packed    = packed;
+	
+	if (setjmp(hash_error_jmpbuf)) {
+		pack_context_free(this);
+		return 0;
+	}
+	
+	// index locations of all 4-byte sequences occurring in the input
+	for (uint16_t i = 0; inputsize >= 4 && i < inputsize - 4; i++) {
+		tuple_t *tuple;
+		int currbytes = (int)COMBINE(unpacked[i], unpacked[i+1], unpacked[i+2], unpacked[i+3]);
+		
+		// has this one been indexed already
+		HASH_FIND_INT(this->offsets, &currbytes, tuple);
+		if (!tuple) {
+			tuple = (tuple_t*)malloc(sizeof(tuple_t));
+			if (!tuple) {
+				pack_context_free(this);
+				return 0;
+			}
+			tuple->bytes = currbytes;
+			tuple->offset = i;
+			HASH_ADD_INT(this->offsets, bytes, tuple);
+		}
+	}
+	
+	return this;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -244,7 +263,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	
 	// references to previous data which goes in the same direction
 	// see if this byte sequence exists elsewhere, then start searching.
-	currbytes = COMBINE(current[0], current[1], current[2], current[3]);
+	currbytes = (int)COMBINE(current[0], current[1], current[2], current[3]);
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
 	if (tuple) for (uint8_t *pos = start + tuple->offset; pos && pos < current;) {
@@ -262,7 +281,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	if (fast) return;
 	
 	// references to data where the bits are rotated
-	currbytes = COMBINE(rotate(current[0]), rotate(current[1]), rotate(current[2]), rotate(current[3]));
+	currbytes = (int)COMBINE(rotate(current[0]), rotate(current[1]), rotate(current[2]), rotate(current[3]));
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
 	if (tuple) for (uint8_t *pos = start + tuple->offset; pos && pos < current;) {
@@ -276,7 +295,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	}
 	
 	// references to data which goes backwards
-	currbytes = COMBINE(current[3], current[2], current[1], current[0]);
+	currbytes = (int)COMBINE(current[3], current[2], current[1], current[0]);
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
 	if (tuple) for (uint8_t *pos = start + tuple->offset + 3; pos && pos < current; pos++) {
@@ -498,7 +517,7 @@ static void pack_normal(pack_context_t *this, int fast) {
 }
 
 // ------------------------------------------------------------------------------------------------
-static void pack_optimal(pack_context_t *this, int fast) {
+static int pack_optimal(pack_context_t *this, int fast) {
 	size_t inputsize = this->inputsize;
 	// backref and RLE compression candidates
 	backref_t backref = {0};
@@ -524,6 +543,8 @@ static void pack_optimal(pack_context_t *this, int fast) {
 	} node_t;
 	node_t *nodes = calloc(inputsize+1, sizeof(node_t));
 	node_t *node, *other;
+	
+	if (!nodes) return 1;
 	
 	for (this->inpos = 0; this->inpos < inputsize; this->inpos++) {
 		node = nodes+this->inpos;
@@ -606,6 +627,7 @@ static void pack_optimal(pack_context_t *this, int fast) {
 	}
 	
 	free(nodes);
+	return 0;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -622,11 +644,12 @@ size_t exhal_pack2(uint8_t *unpacked, size_t inputsize, uint8_t *packed, const p
 	if (!ctx) return 0;
 
 	if (inputsize > 0) {
-		if (options && options->optimal)
-			pack_optimal(ctx, options ? options->fast : 0);
-		else
+		if (options && options->optimal) {
+			if (pack_optimal(ctx, options ? options->fast : 0)) return 0;
+		} else {
 			pack_normal(ctx, options ? options->fast : 0);
-	}
+		}
+	}	
 		
 	if (write_trailer(ctx)) {
 		// compressed data was written successfully
