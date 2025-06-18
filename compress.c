@@ -81,7 +81,7 @@ typedef struct {
 #define COMBINE(w, x, y, z) (((unsigned)(w) << 24) | ((x) << 16) | ((y) << 8) | (z))
 
 typedef struct {
-	uint8_t *unpacked;
+	const uint8_t *unpacked;
 	size_t inputsize;
 	uint8_t *packed;
 	
@@ -116,7 +116,7 @@ static void pack_context_free(pack_context_t* this) {
 }
 
 // ------------------------------------------------------------------------------------------------
-static pack_context_t* pack_context_alloc(uint8_t *unpacked, size_t inputsize, uint8_t *packed) {
+static pack_context_t* pack_context_alloc(const uint8_t *unpacked, size_t inputsize, uint8_t *packed) {
 	pack_context_t *this;
 	
 	if (inputsize > DATA_SIZE) return 0;
@@ -198,8 +198,8 @@ static inline void rle_candidate(rle_t *candidate, size_t size, uint16_t data, m
 // start and current are positions within the uncompressed input stream.
 // fast enables faster compression by ignoring sequence RLE.
 static void rle_check(const pack_context_t *this, rle_t *candidate, int fast) {
-	uint8_t *start   = this->unpacked;
-	uint8_t *current = start + this->inpos;
+	const uint8_t *start   = this->unpacked;
+	const uint8_t *current = start + this->inpos;
 	size_t insize = this->inputsize;
 	size_t size;
 	
@@ -249,8 +249,8 @@ static inline void backref_candidate(backref_t *candidate, size_t offset, size_t
 // start and current are positions within the uncompressed input stream.
 // fast enables fast mode which only uses regular forward references
 static void ref_search (const pack_context_t *this, backref_t *candidate, int fast) {
-	uint8_t *start   = this->unpacked;
-	uint8_t *current = start + this->inpos;
+	const uint8_t *start   = this->unpacked;
+	const uint8_t *current = start + this->inpos;
 	size_t insize = this->inputsize;
 	tuple_t *offsets = this->offsets;
 	
@@ -267,7 +267,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	currbytes = COMBINE(current[0], current[1], current[2], current[3]);
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
-	if (tuple) for (uint8_t *pos = start + tuple->offset; pos && pos < current;) {
+	if (tuple) for (const uint8_t *pos = start + tuple->offset; pos && pos < current;) {
 		// see how many bytes in a row are the same between the current uncompressed data
 		// and the data at the position being searched
 		for (; size <= LONG_RUN_SIZE && current + size < start + insize; size++) {
@@ -285,7 +285,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	currbytes = COMBINE(rotate(current[0]), rotate(current[1]), rotate(current[2]), rotate(current[3]));
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
-	if (tuple) for (uint8_t *pos = start + tuple->offset; pos && pos < current;) {
+	if (tuple) for (const uint8_t *pos = start + tuple->offset; pos && pos < current;) {
 		// now repeat the check with the bit rotation method
 		for (; size <= LONG_RUN_SIZE && current + size < start + insize; size++) {
 			if (pos[size] != rotate(current[size])) break;
@@ -299,7 +299,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	currbytes = COMBINE(current[3], current[2], current[1], current[0]);
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
-	if (tuple) for (uint8_t *pos = start + tuple->offset + 3; pos && pos < current; pos++) {
+	if (tuple) for (const uint8_t *pos = start + tuple->offset + 3; pos && pos < current; pos++) {
 		// now repeat the check but go backwards
 		// TODO: possibly use memmem to speed up this one a bit also,
 		// though we'd then basically be searching both backwards and forwards,
@@ -636,7 +636,7 @@ static int pack_optimal(pack_context_t *this, int fast) {
 // unpacked/packed are 65536 byte buffers to read/from write to, 
 // inputsize is the length of the uncompressed data.
 // Returns the size of the compressed data in bytes, or 0 if compression failed.
-size_t exhal_pack2(uint8_t *unpacked, size_t inputsize, uint8_t *packed, const pack_options_t *options) {
+size_t exhal_pack2(const uint8_t *unpacked, size_t inputsize, uint8_t *packed, const pack_options_t *options) {
 	size_t outpos = 0;
 	
 	debug("inputsize = %d\n", inputsize);
@@ -665,7 +665,7 @@ size_t exhal_pack2(uint8_t *unpacked, size_t inputsize, uint8_t *packed, const p
 }
 
 // ------------------------------------------------------------------------------------------------
-size_t exhal_pack(uint8_t *unpacked, size_t inputsize, uint8_t *packed, int fast) {
+size_t exhal_pack(const uint8_t *unpacked, size_t inputsize, uint8_t *packed, int fast) {
 	pack_options_t options = {
 		.fast = fast,
 	};
@@ -676,7 +676,7 @@ size_t exhal_pack(uint8_t *unpacked, size_t inputsize, uint8_t *packed, int fast
 // Decompresses a file of up to 64 kb.
 // unpacked/packed are 65536 byte buffers to read/from write to, 
 // Returns the size of the uncompressed data in bytes or 0 if decompression failed.
-size_t exhal_unpack(uint8_t *packed, uint8_t *unpacked, unpack_stats_t *stats) {
+size_t exhal_unpack(const uint8_t *packed, uint8_t *unpacked, unpack_stats_t *stats) {
 	// current input/output positions
 	uint32_t  inpos = 0;
 	uint32_t  outpos = 0;

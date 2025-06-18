@@ -25,7 +25,7 @@ int main(int argc, char *argv[]) {
       skipped += 4;
       continue;
     }
-    size_t decompressed_size = fread(decompressed_file, 65536, 1, f);
+    size_t decompressed_size = fread(decompressed_file, 1, 65536, f);
     if (ferror(f)) {
       fprintf(stderr, "Skipping %s - couldn't read the file after opening it\n", argv[i]);
       fclose(f);
@@ -39,12 +39,14 @@ int main(int argc, char *argv[]) {
       pack_options_t options;
       options.optimal = !!(settings_combo & 2);
       options.fast = !!(settings_combo & 1);
+      printf("Testing settings: fast=%d optimal=%d\n", options.fast, options.optimal);
       
       size_t compressed_size = 0;
       
       // Try to compress it with these settings (assume that it will eventually succeed)
       for (int allocation_limit = 0; compressed_size == 0; ++allocation_limit) {
         exhal_shim_init(allocation_limit);
+        // printf("Allocation limit: %d\n", allocation_limit);
         compressed_size = exhal_pack2(decompressed_file, decompressed_size, compressed_file, &options);
       }
       memset(&compressed_file[compressed_size], 0xAA, 65536 - compressed_size);
