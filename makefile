@@ -2,7 +2,7 @@
 # copyright 2013 Devin Acker (Revenant)
 # See copying.txt for legal information.
 
-CFLAGS  += -std=c99 -Og -Wall -Wextra -fsanitize=undefined -fanalyzer
+CFLAGS  += -std=c99 -Og -g3 -Wall -Wextra -fsanitize=undefined -fsanitize=address -fanalyzer
 
 # Add extension when compiling for Windows
 ifeq ($(OS), Windows_NT)
