@@ -34,6 +34,7 @@
 #undef uthash_nonfatal_oom
 #define uthash_nonfatal_oom(elt) recover_from_hash_oom((tuple_t *) (elt))
 #include "uthash.h"
+#include "malloc_shim.h"
 
 // memmem.c
 void *memmem(const void *h0, size_t k, const void *n0, size_t l);
@@ -133,7 +134,7 @@ static pack_context_t* pack_context_alloc(uint8_t *unpacked, size_t inputsize, u
 	// index locations of all 4-byte sequences occurring in the input
 	for (uint16_t i = 0; inputsize >= 4 && i < inputsize - 4; i++) {
 		tuple_t *tuple;
-		int currbytes = (int)COMBINE(unpacked[i], unpacked[i+1], unpacked[i+2], unpacked[i+3]);
+		int currbytes = COMBINE(unpacked[i], unpacked[i+1], unpacked[i+2], unpacked[i+3]);
 		
 		// has this one been indexed already
 		HASH_FIND_INT(this->offsets, &currbytes, tuple);
@@ -263,7 +264,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	
 	// references to previous data which goes in the same direction
 	// see if this byte sequence exists elsewhere, then start searching.
-	currbytes = (int)COMBINE(current[0], current[1], current[2], current[3]);
+	currbytes = COMBINE(current[0], current[1], current[2], current[3]);
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
 	if (tuple) for (uint8_t *pos = start + tuple->offset; pos && pos < current;) {
@@ -281,7 +282,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	if (fast) return;
 	
 	// references to data where the bits are rotated
-	currbytes = (int)COMBINE(rotate(current[0]), rotate(current[1]), rotate(current[2]), rotate(current[3]));
+	currbytes = COMBINE(rotate(current[0]), rotate(current[1]), rotate(current[2]), rotate(current[3]));
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
 	if (tuple) for (uint8_t *pos = start + tuple->offset; pos && pos < current;) {
@@ -295,7 +296,7 @@ static void ref_search (const pack_context_t *this, backref_t *candidate, int fa
 	}
 	
 	// references to data which goes backwards
-	currbytes = (int)COMBINE(current[3], current[2], current[1], current[0]);
+	currbytes = COMBINE(current[3], current[2], current[1], current[0]);
 	size = 4;
 	HASH_FIND_INT(offsets, &currbytes, tuple);
 	if (tuple) for (uint8_t *pos = start + tuple->offset + 3; pos && pos < current; pos++) {
@@ -645,7 +646,10 @@ size_t exhal_pack2(uint8_t *unpacked, size_t inputsize, uint8_t *packed, const p
 
 	if (inputsize > 0) {
 		if (options && options->optimal) {
-			if (pack_optimal(ctx, options ? options->fast : 0)) return 0;
+			if (pack_optimal(ctx, options ? options->fast : 0)) {
+				pack_context_free(ctx);
+				return 0;
+			}
 		} else {
 			pack_normal(ctx, options ? options->fast : 0);
 		}
@@ -763,7 +767,7 @@ size_t exhal_unpack(uint8_t *packed, uint8_t *unpacked, unpack_stats_t *stats) {
 			// this for GB games as well). let's handle it anyway
 			command = 4;
 
-			if (insize < 2) return 0;
+			if (	insize < 2) return 0;
 			
 			offset = (packed[inpos] << 8) | packed[inpos+1];
 			debug("%06x: writing %u byte forward ref to %x\n", inpos, length, offset);

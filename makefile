@@ -2,7 +2,7 @@
 # copyright 2013 Devin Acker (Revenant)
 # See copying.txt for legal information.
 
-CFLAGS  += -std=c99 -O3 -Wall -s
+CFLAGS  += -std=c99 -O3 -Wall -Wextra -s -fsanitize=undefined -fanalyzer
 
 # Add extension when compiling for Windows
 ifeq ($(OS), Windows_NT)
@@ -29,4 +29,7 @@ inhal$(EXT): inhal.o compress.o memmem.o
 	$(CC) $(CFLAGS) -o $@ $^
 	
 exhal$(EXT): exhal.o compress.o memmem.o
+	$(CC) $(CFLAGS) -o $@ $^
+
+test$(EXT): compress.o malloc_shim.o test_driver.o
 	$(CC) $(CFLAGS) -o $@ $^
