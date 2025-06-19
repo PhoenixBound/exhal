@@ -532,7 +532,7 @@ static void pack_optimal(pack_context_t *this, int fast) {
 		// check for a potential RLE
 		rle_check(this, &rle, fast);
 		// check for a potential back reference
-		if (rle.size < LONG_RUN_SIZE && inputsize >= 4)
+		if (rle.size < LONG_RUN_SIZE && inputsize - this->inpos >= 4)
 			ref_search(this, &backref, fast);
 		else backref.size = 0;
 		
