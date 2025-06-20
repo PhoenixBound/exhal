@@ -100,6 +100,7 @@ typedef struct {
 static _Thread_local jmp_buf hash_error_jmpbuf;
 // ------------------------------------------------------------------------------------------------
 static void recover_from_hash_oom(tuple_t *element) {
+	free(element);
 	longjmp(hash_error_jmpbuf, 1);
 }
 
@@ -116,10 +117,11 @@ static void pack_context_free(pack_context_t* this) {
 
 // ------------------------------------------------------------------------------------------------
 static pack_context_t* pack_context_alloc(const uint8_t *unpacked, size_t inputsize, uint8_t *packed) {
-	pack_context_t *this;
-	
 	if (inputsize > DATA_SIZE) return 0;
-	if (!(this = calloc(1, sizeof(*this)))) return 0;
+
+	// `this` must never be reassigned after the setjmp, because its value is used after a longjmp
+	pack_context_t *const this = calloc(1, sizeof(*this));
+	if (!this) return 0;
 	
 	this->unpacked  = unpacked;
 	this->inputsize = inputsize;
@@ -213,12 +215,14 @@ static void rle_check(const pack_context_t *this, rle_t *candidate, int fast) {
 	rle_candidate(candidate, size, current[0], rle_8);
 
 	// check for possible 16-bit RLE
-	uint16_t first = current[0] | (current[1] << 8);
-	for (size = 0; size <= 2*LONG_RUN_SIZE && current + size < start + insize - 1; size += 2) {
-		uint16_t next = current[size] | (current[size + 1] << 8);
-		if (next != first) break;
+	if (insize - this->inpos >= 2) {
+		uint16_t first = current[0] | (current[1] << 8);
+		for (size = 0; size <= 2*LONG_RUN_SIZE && current + size < start + insize - 1; size += 2) {
+			uint16_t next = current[size] | (current[size + 1] << 8);
+			if (next != first) break;
+		}
+		rle_candidate(candidate, size, first, rle_16);
 	}
-	rle_candidate(candidate, size, first, rle_16);
 	
 	// fast mode: don't use sequence RLE
 	if (fast) return;
@@ -643,15 +647,16 @@ size_t exhal_pack2(const uint8_t *unpacked, size_t inputsize, uint8_t *packed, c
 	pack_context_t *ctx = pack_context_alloc(unpacked, inputsize, packed);
 	if (!ctx) return 0;
 
+	int failed = 0;
 	if (inputsize > 0) {
 		if (options && options->optimal) {
-			if (pack_optimal(ctx, options ? options->fast : 0)) return 0;
+			failed = pack_optimal(ctx, options ? options->fast : 0);
 		} else {
 			pack_normal(ctx, options ? options->fast : 0);
 		}
 	}	
 		
-	if (write_trailer(ctx)) {
+	if (!failed && write_trailer(ctx)) {
 		// compressed data was written successfully
 		outpos = (size_t)ctx->outpos;
 	}
