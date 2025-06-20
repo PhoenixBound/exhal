@@ -26,6 +26,8 @@
 	
 */
 
+#include "malloc_shim.h"
+
 #include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
