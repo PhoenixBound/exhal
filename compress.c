@@ -32,7 +32,10 @@
 #include "compress.h"
 #define HASH_NONFATAL_OOM 1
 #undef uthash_nonfatal_oom
-#define uthash_nonfatal_oom(elt) recover_from_hash_oom((tuple_t *) (elt))
+#define uthash_nonfatal_oom(elt) do { \
+	exhal_failed_insertion_element = (elt); \
+	goto exhal_handle_uthash_failure; \
+} while (0)
 #include "uthash.h"
 
 // memmem.c
@@ -97,13 +100,6 @@ typedef struct {
 	
 } pack_context_t;
 
-static _Thread_local jmp_buf hash_error_jmpbuf;
-// ------------------------------------------------------------------------------------------------
-static void recover_from_hash_oom(tuple_t *element) {
-	free(element);
-	longjmp(hash_error_jmpbuf, 1);
-}
-
 // ------------------------------------------------------------------------------------------------
 static void pack_context_free(pack_context_t* this) {
 	tuple_t *curr, *temp;
@@ -117,21 +113,17 @@ static void pack_context_free(pack_context_t* this) {
 
 // ------------------------------------------------------------------------------------------------
 static pack_context_t* pack_context_alloc(const uint8_t *unpacked, size_t inputsize, uint8_t *packed) {
-	if (inputsize > DATA_SIZE) return 0;
+	pack_context_t *this;
 
-	// `this` must never be reassigned after the setjmp, because its value is used after a longjmp
-	pack_context_t *const this = calloc(1, sizeof(*this));
-	if (!this) return 0;
-	
+	if (inputsize > DATA_SIZE) return 0;
+	if (!(this = calloc(1, sizeof(*this)))) return 0;
+
 	this->unpacked  = unpacked;
 	this->inputsize = inputsize;
 	this->packed    = packed;
-	
-	if (setjmp(hash_error_jmpbuf)) {
-		pack_context_free(this);
-		return 0;
-	}
-	
+
+	tuple_t *exhal_failed_insertion_element = 0;
+
 	// index locations of all 4-byte sequences occurring in the input
 	for (uint16_t i = 0; inputsize >= 4 && i < inputsize - 4; i++) {
 		tuple_t *tuple;
@@ -152,6 +144,11 @@ static pack_context_t* pack_context_alloc(const uint8_t *unpacked, size_t inputs
 	}
 	
 	return this;
+
+exhal_handle_uthash_failure:
+	free(exhal_failed_insertion_element);
+	pack_context_free(this);
+	return 0;
 }
 
 // ------------------------------------------------------------------------------------------------
